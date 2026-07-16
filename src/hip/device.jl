@@ -88,7 +88,7 @@ properties(dev::HIPDevice) = properties(device_id(dev))
 
 function properties(dev_id::Int)
     props_ref = Ref{hipDeviceProp_t}()
-    hipGetDeviceProperties(props_ref, dev_id)
+    device_properties!(props_ref, dev_id)
     props_ref[]
 end
 

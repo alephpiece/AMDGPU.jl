@@ -56,17 +56,22 @@ function GPUCompiler.finish_module!(
         job.config.target, mod;
         wavefrontsize64=job.config.params.wavefrontsize64)
 
-    # Set kernel target cpu and features.
+    # Without an external optimizer, target attributes are needed during
+    # Julia-LLVM optimization. With an external optimizer, GPUCompiler adds
+    # them only after all Julia-LLVM passes have finished.
     if LLVM.callconv(entry) == LLVM.API.LLVMAMDGPUKERNELCallConv
-        target_cpu_attr = StringAttribute("target-cpu", job.config.target.dev_isa)
-        target_features_attr = StringAttribute("target-features", job.config.target.features)
         atomic_attr = StringAttribute("amdgpu-unsafe-fp-atomics", "true")
 
         # TODO add convergent, mustprogress, willreturn attributes?
 
         attrs = LLVM.function_attributes(entry)
-        push!(attrs, target_cpu_attr)
-        push!(attrs, target_features_attr)
+        uses_external_optimizer =
+            isdefined(GPUCompiler, :uses_external_gcn_optimizer) &&
+            GPUCompiler.uses_external_gcn_optimizer(job.config.target)
+        if !uses_external_optimizer
+            push!(attrs, StringAttribute("target-cpu", job.config.target.dev_isa))
+            push!(attrs, StringAttribute("target-features", job.config.target.features))
+        end
         push!(attrs, atomic_attr)
     end
 
@@ -119,8 +124,8 @@ function parse_llvm_features(arch::String)
     length(splits) == 1 && return (; dev_isa=splits[1], features="")
 
     dev_isa, features = splits[1], splits[2:end]
-    features = join(map(x -> x[1:end - 1], filter(x -> x[end] == '+', features)), ",+")
-    isempty(features) || (features = "+" * features)
+    features = filter(x -> x[end] in ('+', '-'), features)
+    features = join(map(x -> "$(x[end])$(x[1:end - 1])", features), ",")
     (; dev_isa, features)
 end
 

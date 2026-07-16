@@ -15,6 +15,7 @@ import GPUToolbox: @gcsafe_ccall
 
 include("libhip.jl")
 include("error.jl")
+include("runtime_compat.jl")
 include("device.jl")
 
 hipMemLocation(type::hipMemLocationType, id::Integer) = reinterpret(hipMemLocation, (type, Cint(id)))
