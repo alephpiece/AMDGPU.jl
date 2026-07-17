@@ -49,9 +49,8 @@ function GPUCompiler.finish_module!(
         Tuple{CompilerJob{GCNCompilerTarget}, typeof(mod), typeof(entry)},
         job, mod, entry)
 
-    # Re-link device libs to resolve references introduced by the GPUCompiler
-    # runtime (e.g. boxing → malloc → hostcall → __ockl_hsa_signal*) which are
-    # added after link_libraries! has already run.
+    # Link device libraries before driver-level library linking and optimization.
+    # GPUCompiler invokes link_libraries! again after lowering runtime calls.
     link_device_libs!(
         job.config.target, mod;
         wavefrontsize64=job.config.params.wavefrontsize64)
