@@ -118,6 +118,28 @@ function GPUCompiler.finish_module!(
     return entry
 end
 
+function GPUCompiler.finish_ir!(
+    @nospecialize(job::HIPCompilerJob), mod::LLVM.Module, entry::LLVM.Function,
+)
+    entry = invoke(GPUCompiler.finish_ir!,
+        Tuple{CompilerJob{GCNCompilerTarget}, typeof(mod), typeof(entry)},
+        job, mod, entry)
+
+    # Julia-side optimization can introduce device-library references after the
+    # normal linking hooks. The external optimizer will optimize anything linked
+    # here, so close the symbol set at the final IR extension point.
+    uses_external_optimizer =
+        isdefined(GPUCompiler, :uses_external_gcn_optimizer) &&
+        GPUCompiler.uses_external_gcn_optimizer(job.config.target)
+    if job.config.toplevel && job.config.libraries && job.config.optimize &&
+       uses_external_optimizer
+        close_device_libs!(
+            job.config.target, mod;
+            wavefrontsize64=job.config.params.wavefrontsize64)
+    end
+    return entry
+end
+
 function parse_llvm_features(arch::String)
     splits = split(arch, ":")
     length(splits) == 1 && return (; dev_isa=splits[1], features="")

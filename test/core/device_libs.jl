@@ -20,6 +20,21 @@ end
 
 @testset "Device-library selection" begin
     GPUCompiler.JuliaContext() do ctx
+        mktempdir() do artifact_dir
+            mktempdir() do isa_dir
+                artifact_file = joinpath(artifact_dir, "oclc_isa_version_900.bc")
+                isa_file = joinpath(isa_dir, "oclc_isa_version_936.bc")
+                touch(artifact_file)
+                touch(isa_file)
+
+                @test Compiler._locate_lib(
+                    "oclc_isa_version_936", (isa_dir, artifact_dir)) == isa_file
+                @test Compiler._locate_lib(
+                    "oclc_isa_version_900", (isa_dir, artifact_dir)) == artifact_file
+                @test isnothing(Compiler._locate_lib("oclc_isa_version_938", (isa_dir,)))
+            end
+        end
+
         provider_ir = """
             @provided_global = global i32 7
 
@@ -28,6 +43,12 @@ end
             }
 
             @provided_alias = alias i32 (), ptr @provided_function
+
+            define ptr @ifunc_resolver() {
+              ret ptr @provided_function
+            }
+
+            @provided_ifunc = ifunc i32 (), ptr @ifunc_resolver
             """
 
         lib = devlib_from_ir("alias-provider", provider_ir)
@@ -38,7 +59,8 @@ end
         @test Compiler.load_and_link!(lib, target, Set(["provided_alias"]))
         @test occursin("@provided_alias = alias", string(target))
         @test issubset(
-            Set(["provided_function", "provided_global", "provided_alias"]),
+            Set(["provided_function", "provided_global", "provided_alias",
+                 "provided_ifunc"]),
             lib.provided_symbols)
         dispose(target)
 
@@ -81,6 +103,27 @@ end
         unresolved = Compiler._undefined_symbol_names(target)
         @test "entry" ∉ unresolved
         @test "dependency" ∉ unresolved
+        dispose(target)
+
+        target = parse(LLVM.Module, """
+            @provided_global = external global i32
+            @unused_global = external global i32
+
+            declare i32 @provided_function()
+            declare i32 @unused_function()
+
+            define i32 @kernel() {
+              %global = load i32, ptr @provided_global
+              %value = call i32 @provided_function()
+              %result = add i32 %global, %value
+              ret i32 %result
+            }
+            """)
+        referenced = Compiler._referenced_undefined_symbol_names(target)
+        @test "provided_global" in referenced
+        @test "unused_global" ∉ referenced
+        @test "provided_function" in referenced
+        @test "unused_function" ∉ referenced
         dispose(target)
     end
 end

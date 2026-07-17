@@ -108,6 +108,34 @@ function find_device_libs(rocm_path::String)::String
     return ""
 end
 
+function check_isa_device_libs(path::String)::String
+    isdir(path) || return ""
+    any(readdir(path)) do file
+        startswith(file, "oclc_isa_version_") && endswith(file, ".bc")
+    end || return ""
+    return path
+end
+
+function find_isa_device_libs(rocm_path::String)::String
+    for variable in ("HIP_DEVICE_LIB_PATH", "DEVICE_LIB_PATH")
+        path = check_isa_device_libs(get(ENV, variable, ""))
+        isempty(path) || return path
+    end
+
+    env_root = get(ENV, "ROCM_PATH", "")
+    roots = String[env_root, rocm_path]
+    isempty(rocm_path) || push!(roots, dirname(rocm_path))
+    filter!(root -> !isempty(root), roots)
+    unique!(roots)
+    for root in roots
+        for relative in (("dcc", "dccgcn", "bitcode"), ("amdgcn", "bitcode"))
+            path = check_isa_device_libs(joinpath(root, relative...))
+            isempty(path) || return path
+        end
+    end
+    return ""
+end
+
 function find_rocm_library(libs::Vector; rocm_path::String, ext::String = dlext)::String
     for lib in libs
         path = find_rocm_library(lib, rocm_path, ext)

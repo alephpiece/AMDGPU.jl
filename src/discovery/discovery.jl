@@ -1,6 +1,6 @@
 module ROCmDiscovery
 
-export lld_artifact, lld_path, libhsaruntime, libdevice_libs, libhip
+export lld_artifact, lld_path, libhsaruntime, libdevice_libs, libdevice_isa_libs, libhip
 export librocblas, librocsparse, librocsolver
 export librocrand, librocfft, libMIOpen_path
 
@@ -50,6 +50,7 @@ global lld_path::String = ""
 global lld_artifact::Bool = false
 global libhip::String = ""
 global libdevice_libs::String = ""
+global libdevice_isa_libs::String = ""
 global librocblas::String = ""
 global librocsparse::String = ""
 global librocsolver::String = ""
@@ -89,6 +90,7 @@ function __init__()
         # Always load artifact device libraries.
         from_artifact = true
         global libdevice_libs = get_device_libs(from_artifact; rocm_path)
+        global libdevice_isa_libs = find_isa_device_libs(rocm_path)
 
         # HIP-based libraries.
         global librocblas = find_rocm_library(lib_prefix * "rocblas"; rocm_path)

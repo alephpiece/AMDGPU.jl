@@ -1,16 +1,18 @@
-import AMDGPU: libdevice_libs
+import AMDGPU: libdevice_libs, libdevice_isa_libs
 
-function locate_lib(file)
-    file_path = joinpath(libdevice_libs, file * ".bc")
-    if !ispath(file_path)
-        file_path = joinpath(libdevice_libs, file * ".amdgcn.bc")
-        if !ispath(file_path)
-            # failed to find matching bitcode file
-            return nothing
+function _locate_lib(file, directories)
+    for directory in directories
+        isempty(directory) && continue
+        for suffix in (".bc", ".amdgcn.bc")
+            file_path = joinpath(directory, file * suffix)
+            ispath(file_path) && return file_path
         end
     end
-    return file_path
+    return nothing
 end
+
+locate_lib(file) = _locate_lib(file, (libdevice_libs,))
+locate_isa_lib(file) = _locate_lib(file, (libdevice_isa_libs, libdevice_libs))
 
 mutable struct DevLib
     name::String
@@ -37,6 +39,17 @@ function _add_global_alias_names!(names::Set{String}, mod::LLVM.Module)
     return names
 end
 
+function _add_global_ifunc_names!(names::Set{String}, mod::LLVM.Module)
+    ifunc_ref = LLVM.API.LLVMGetFirstGlobalIFunc(mod)
+    while ifunc_ref != C_NULL
+        len = Ref{Csize_t}()
+        name_ptr = LLVM.API.LLVMGetValueName2(ifunc_ref, len)
+        len[] > 0 && push!(names, unsafe_string(Ptr{UInt8}(name_ptr), len[]))
+        ifunc_ref = LLVM.API.LLVMGetNextGlobalIFunc(ifunc_ref)
+    end
+    return names
+end
+
 function _provided_symbol_names(mod::LLVM.Module)
     names = Set{String}(
         LLVM.name(f) for f in functions(mod) if !isdeclaration(f))
@@ -44,6 +57,7 @@ function _provided_symbol_names(mod::LLVM.Module)
         (LLVM.name(g) for g in globals(mod)
          if !isdeclaration(g) && !isempty(LLVM.name(g))))
     _add_global_alias_names!(names, mod)
+    _add_global_ifunc_names!(names, mod)
     return names
 end
 
@@ -54,6 +68,16 @@ function _undefined_symbol_names(mod::LLVM.Module)
     union!(names,
         (LLVM.name(g) for g in globals(mod)
          if isdeclaration(g) && !isempty(LLVM.name(g))))
+    return names
+end
+
+function _referenced_undefined_symbol_names(mod::LLVM.Module)
+    names = Set{String}(
+        LLVM.name(f) for f in functions(mod)
+        if isdeclaration(f) && !LLVM.isintrinsic(f) && !isempty(uses(f)))
+    union!(names,
+        (LLVM.name(g) for g in globals(mod)
+         if isdeclaration(g) && !isempty(LLVM.name(g)) && !isempty(uses(g))))
     return names
 end
 
@@ -85,8 +109,15 @@ function link_device_libs!(
 )
     isnothing(libdevice_libs) && return
 
-    # 1. Load other libraries.
-    lib_names = ("hc", "hip", "irif", "ockl", "opencl", "ocml")
+    # 1. Preserve module-level metadata carried by hip.bc. It currently has no
+    # provider symbols, so a symbol-driven selector cannot discover it.
+    devlib = get!(DEVICE_LIBS, "hip") do
+        DevLib("hip", locate_lib("hip"))
+    end
+    load_and_link!(devlib, mod)
+
+    # 2. Load symbol-providing libraries.
+    lib_names = ("hc", "irif", "ockl", "opencl", "ocml")
     if !isempty(_undefined_symbol_names(mod))
         devlibs = map(lib_names) do lib_name
             get!(DEVICE_LIBS, lib_name) do
@@ -96,21 +127,21 @@ function link_device_libs!(
         _link_referenced_device_libs!(mod, devlibs)
     end
 
-    # 2. Load OCLC library.
+    # 3. Load OCLC library.
     isa_short = replace(target.dev_isa, "gfx"=>"")
     name = "oclc_isa_version_$isa_short"
     devlib = get!(DEVICE_LIBS, name) do
-        DevLib(name, locate_lib(name))
+        DevLib(name, locate_isa_lib(name))
     end
     load_and_link!(devlib, mod)
 
-    # 3. Load OCLC ABI library.
+    # 4. Load OCLC ABI library.
     devlib = get!(DEVICE_LIBS, "oclc_abi") do
         DevLib("oclc_abi", locate_lib("oclc_abi_version_500"))
     end
     load_and_link!(devlib, mod)
 
-    # 4. Load options libraries.
+    # 5. Load options libraries.
     options = (
         (:finite_only, false),
         (:unsafe_math, false),
@@ -126,6 +157,28 @@ function link_device_libs!(
         end
         load_and_link!(devlib, mod)
     end
+end
+
+function close_device_libs!(
+    target::GCNCompilerTarget, mod::LLVM.Module;
+    wavefrontsize64::Bool,
+)
+    link_device_libs!(target, mod; wavefrontsize64)
+
+    unresolved = _referenced_undefined_symbol_names(mod)
+    isempty(unresolved) && return
+
+    known_symbols = Set{String}()
+    for devlib in values(DEVICE_LIBS)
+        isnothing(devlib.provided_symbols) && continue
+        union!(known_symbols, devlib.provided_symbols)
+    end
+    residual = intersect(unresolved, known_symbols)
+    union!(residual, filter(name -> startswith(name, "__oclc_"), unresolved))
+    isempty(residual) || error(
+        "Unresolved ROCm device-library symbols after final linking: " *
+        join(sort!(collect(residual)), ", "))
+    return
 end
 
 function load_and_link!(

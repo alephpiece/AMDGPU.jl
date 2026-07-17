@@ -3,6 +3,16 @@ using AMDGPU
 using AMDGPU: ROCArray, @roc
 using Base.FastMath
 
+@testset "BW ISA device library" begin
+    target = AMDGPU.Compiler.compiler_config(AMDGPU.device()).target
+    if target.dev_isa in ("gfx936", "gfx938")
+        name = "oclc_isa_version_$(replace(target.dev_isa, "gfx" => ""))"
+        path = AMDGPU.Compiler.locate_isa_lib(name)
+        @test !isnothing(path)
+        @test dirname(path) == AMDGPU.libdevice_isa_libs
+    end
+end
+
 @testset "Math Intrinsics" begin
     for T in (Float16, Float32, Float64)
         a = rand(T, 16) .* T(42)
