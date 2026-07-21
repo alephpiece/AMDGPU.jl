@@ -97,6 +97,11 @@ end
         in_place(X)
     end
 
+    @testset "1D inplace length 32" begin
+        X = rand(T, 32)
+        in_place(X)
+    end
+
     @testset "2D" begin
         dims = (N1,N2)
         X = rand(T, dims)

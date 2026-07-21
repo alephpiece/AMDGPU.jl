@@ -244,7 +244,9 @@ end
 function unsafe_execute!(plan::cROCFFTPlan{T,K,true,N}, X::ROCArray{T,N}) where {T,K,N}
     in_buffer = [pointer(X)]
     with_execution_info(plan) do info
-        rocfft_execute(plan, in_buffer, C_NULL, info)
+        # rocFFT ignores the output buffer for in-place transforms.  Reusing the input
+        # buffer also supports implementations that materialize an output kernel argument.
+        rocfft_execute(plan, in_buffer, in_buffer, info)
     end
 end
 
